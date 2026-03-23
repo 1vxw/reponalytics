@@ -4,11 +4,56 @@ import httpx
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 BASE_URL = "https://api.github.com"
-HEADERS = {
-    "Authorization": f"Bearer {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-}
+
+
+def _get_headers():
+    if not GITHUB_TOKEN:
+        raise Exception("Missing GITHUB_TOKEN. Set repository secret TOKEN.")
+
+    return {
+        "Authorization": f"Bearer {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+
+
+async def get_authenticated_login(client: httpx.AsyncClient):
+    try:
+        response = await client.get(f"{BASE_URL}/user", headers=_get_headers())
+        response.raise_for_status()
+    except httpx.HTTPStatusError as http_err:
+        raise Exception(f"HTTP error: {http_err.response.status_code} - {http_err.response.text}")
+    except httpx.RequestError as e:
+        raise Exception(f"Network error: {str(e)}")
+
+    return response.json().get("login")
+
+
+async def _get_paginated_repos(client: httpx.AsyncClient, url: str, params: dict):
+    repos = []
+    page = 1
+
+    while True:
+        response = await client.get(
+            url,
+            headers=_get_headers(),
+            params={**params, "page": page, "per_page": 100}
+        )
+        response.raise_for_status()
+
+        current_repos = response.json()
+        if not current_repos:
+            break
+
+        repos.extend([repo["name"] for repo in current_repos])
+
+        if "next" not in response.links:
+            break
+
+        page += 1
+
+    return repos
+
 
 # Fetch all traffic data for a user's repositories
 async def get_all_traffic_data(username: str):
@@ -24,14 +69,14 @@ async def get_all_traffic_data(username: str):
     Raises:
         HTTPException: If any error occurs while fetching the data.
     """
-    repos = await get_user_repos(username)
+    repos, repo_owner = await get_user_repos(username)
 
     async with httpx.AsyncClient(http2=True) as client:
         semaphore = asyncio.Semaphore(10)
 
         async def bounded_task(repo_name):
             async with semaphore:
-                return await get_repo_traffic(username, repo_name, client)
+                return await get_repo_traffic(repo_owner, repo_name, client)
 
         tasks = [bounded_task(repo) for repo in repos]
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -58,39 +103,42 @@ async def get_user_repos(username: str):
     Raises:
         dict: A dictionary containing error message if any error occurs while fetching the repositories.
     """
-    url = f"{BASE_URL}/users/{username}/repos"
-    repos = []
-    page = 1
-
     async with httpx.AsyncClient(http2=True) as client:
-        while True:
-            try:
-                response = await client.get(
-                    url,
-                    headers=HEADERS,
-                    params={"page": page, "per_page": 100, "type": "public"}
+        resolved_username = (username or "").strip()
+
+        if not resolved_username:
+            resolved_username = await get_authenticated_login(client)
+            if not resolved_username:
+                raise Exception("Could not resolve authenticated username from GITHUB_TOKEN.")
+
+        try:
+            repos = await _get_paginated_repos(
+                client,
+                f"{BASE_URL}/users/{resolved_username}/repos",
+                {"type": "public"}
+            )
+            return repos, resolved_username
+        except httpx.HTTPStatusError as http_err:
+            if http_err.response.status_code == 404:
+                auth_login = await get_authenticated_login(client)
+                if not auth_login:
+                    raise Exception(
+                        f"GitHub user '{resolved_username}' not found and authenticated login could not be resolved. "
+                        "Check USERNAME and TOKEN secrets."
+                    )
+
+                repos = await _get_paginated_repos(
+                    client,
+                    f"{BASE_URL}/user/repos",
+                    {"visibility": "public", "affiliation": "owner"}
                 )
-                response.raise_for_status()  # Raises HTTPStatusError for 4xx/5xx responses
+                return repos, auth_login
 
-                current_repos = response.json()
-                if not current_repos:
-                    break
-
-                repos.extend([repo["name"] for repo in current_repos])
-
-                if "next" not in response.links:
-                    break
-
-                page += 1
-
-            except httpx.HTTPStatusError as http_err:
-                raise Exception(f"HTTP error: {http_err.response.status_code} - {http_err.response.text}")
-            except httpx.RequestError as e:
-                raise Exception(f"Network error: {str(e)}")
-            except Exception as e:
-                raise Exception(f"Unexpected error: {str(e)}")
-
-    return repos
+            raise Exception(f"HTTP error: {http_err.response.status_code} - {http_err.response.text}")
+        except httpx.RequestError as e:
+            raise Exception(f"Network error: {str(e)}")
+        except Exception as e:
+            raise Exception(f"Unexpected error: {str(e)}")
 
 # Fetch traffic data for a specific repository
 async def get_repo_traffic(repo_owner, repo_name, client: httpx.AsyncClient):
@@ -112,8 +160,8 @@ async def get_repo_traffic(repo_owner, repo_name, client: httpx.AsyncClient):
 
     try:
         clones_res, views_res = await asyncio.gather(
-            client.get(clones_url, headers=HEADERS),
-            client.get(views_url, headers=HEADERS)
+            client.get(clones_url, headers=_get_headers()),
+            client.get(views_url, headers=_get_headers())
         )
         clones_res.raise_for_status()
         views_res.raise_for_status()
@@ -146,7 +194,7 @@ async def get_profile_name():
     
     try:
         async with httpx.AsyncClient(http2=True) as client:
-            response = await client.get(url, headers=HEADERS)
+            response = await client.get(url, headers=_get_headers())
         
         response.raise_for_status()
         
@@ -159,4 +207,4 @@ async def get_profile_name():
     except Exception as e:
         raise Exception(f"Unexpected error: {str(e)}")
 
-    return response_json["name"]
+    return response_json.get("name") or response_json.get("login") or "GitHub User"
