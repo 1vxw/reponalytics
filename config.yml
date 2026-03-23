@@ -10,4 +10,4 @@ views_color: null  # Stroke color for the views line. Set to a hex value (e.g., 
 clones_point_color: null  # Color for the clone data points on the chart. Set to a hex value or leave as `null` for default.
 views_point_color: null  # Color for the view data points on the chart. Set to a hex value or leave as `null` for default., 
 
-exclude_repos: ["https://github.com/Vincepradas/ecommerce-web-frontend", "https://github.com/Vincepradas/nemsuee-client", "https://github.com/Vincepradas/cardwars-kingdom-custom-server",  "https://github.com/Vincepradas/quiz-gen-be"]
+exclude_repos: ["https://github.com/Vincepradas/ecommerce-web-frontend", "https://github.com/Vincepradas/nemsuee-client", "https://github.com/Vincepradas/nemsuee-server", "https://github.com/Vincepradas/cardwars-kingdom-custom-server",  "https://github.com/Vincepradas/quiz-gen-be"]
