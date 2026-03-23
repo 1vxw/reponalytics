@@ -1,5 +1,6 @@
 import asyncio
 import os
+import sys
 import yaml
 from src.services.github_api import get_all_traffic_data, get_profile_name
 from src.services.chart_generator import generate_chart
@@ -42,6 +43,8 @@ async def main():
 
     except Exception as e:
         print(f"An error occurred: {e}")
+        # Exit non-zero so CI fails at the real source of the problem.
+        sys.exit(1)
 
 
 if __name__ == "__main__":
